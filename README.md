@@ -123,3 +123,7 @@ async fn ws_handler(mut ws: WebSocket, info: ConnectInfoWithSocket) {
 
 `error_on_backpressure` returns the first persistent backpressure sample as a
 `PersistentBackPressure`, or an `io::Error` if the monitor fails.
+
+## Versioning 
+
+Versioned against axum's major version. Only tested againt axum@0.8.
