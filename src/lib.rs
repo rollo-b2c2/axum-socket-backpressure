@@ -3,6 +3,7 @@ use std::{
     net::SocketAddr,
     ops::{Deref, DerefMut},
     os::fd::{AsFd, FromRawFd, OwnedFd},
+    pin::Pin,
     sync::Arc,
 };
 
@@ -10,17 +11,17 @@ use axum::{
     extract::connect_info::Connected,
     serve::{IncomingStream, Listener},
 };
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use socket2::SockRef;
-use tokio::net::{TcpListener, TcpStream};
 use std::os::fd::AsRawFd;
+use tokio::net::{TcpListener, TcpStream};
 
-mod socket_backpressure;
 mod monitor;
+mod socket_backpressure;
 
 pub use socket_backpressure::os_sendq_bytes;
 
-use crate::monitor::{PressureConfig, PressureEvent, PressureMonitor};
+pub use crate::monitor::{PersistentBackPressure, PressureConfig, PressureEvent, PressureMonitor};
 
 /// Provides a socket ref to an axum handler:
 ///
@@ -68,13 +69,11 @@ impl From<TcpListener> for TcpListenerWithSocketRef {
     }
 }
 
-
 impl TcpListenerWithSocketRef {
     pub fn new(inner: TcpListener) -> Self {
         Self { inner }
     }
 }
-
 
 impl TcpListenerWithSocketRef {
     fn dup_socket(tcp: &impl AsFd) -> OwnedFd {
@@ -130,7 +129,6 @@ impl Listener for TcpListenerWithSocketRef {
     }
 }
 
-
 /// Provides connection info with a socket
 ///
 /// Implements `Deref<Target=SocketAddr>` for backwards
@@ -140,7 +138,6 @@ pub struct ConnectInfoWithSocket {
     peer: SocketAddr,
     socket_fd: Arc<OwnedFd>,
 }
-
 
 impl Deref for ConnectInfoWithSocket {
     type Target = SocketAddr;
@@ -161,7 +158,7 @@ impl ConnectInfoWithSocket {
     ///     Path(buffer_size): Path<u32>,
     ///     connection_info: ConnectInfoWithSocket
     /// ) ->  impl IntoResponse {
-    /// 
+    ///
     ///     // Dynamically setting the send buffer size
     ///     if let Err(_) = connection_info.as_socket_ref().set_send_buffer_size(buffer_size as usize) {
     ///         return "could not set buffer size"
@@ -173,31 +170,76 @@ impl ConnectInfoWithSocket {
         SockRef::from(&self.socket_fd)
     }
 
-    async fn backpressure_events(&self, cfg: PressureConfig) -> impl futures::stream::Stream<Item=io::Result<PressureEvent>> {
+    /// Waits until the first `PressureEvent::Persistent` is observed and returns it as
+    /// `PersistentBackPressure`.
+    ///
+    /// Any `io::Error` produced by the underlying monitor is returned immediately.
+    ///
+    /// If the backpressure event stream ends without yielding a persistent event, this returns
+    /// `UnexpectedEof`.
+    pub async fn error_on_backpressure(
+        self: Pin<&Self>,
+        cfg: PressureConfig,
+    ) -> io::Result<PersistentBackPressure> {
+        let s = self.backpressure_events(cfg).try_filter_map(|event| {
+            futures::future::ready(match event {
+                PressureEvent::Persistent {
+                    nonzero_for,
+                    q,
+                    peak_q,
+                } => Ok(Some(PersistentBackPressure {
+                    nonzero_for,
+                    q,
+                    peak_q,
+                })),
+                _ => Ok(None),
+            })
+        });
+
+        futures::pin_mut!(s);
+
+        s.try_next().await?.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::UnexpectedEof, "backpressure stream ended")
+        })
+    }
+
+    /// Produces a sampled stream of `PressureEvent`s from `PressureMonitor::tick`, sleeping for
+    /// `cfg.sample_every` between ticks.
+    ///
+    /// A tick error is emitted once as `Err(...)`
+    /// and then the stream terminates.
+    pub fn backpressure_events(
+        self: Pin<&Self>,
+        cfg: PressureConfig,
+    ) -> impl futures::stream::Stream<Item = io::Result<PressureEvent>> {
         use std::time::Instant;
-        let sample_every = cfg.sample_every;
         let monitor = PressureMonitor::new(cfg);
 
-        futures::stream::unfold((monitor, true, false), move |(mut monitor, init, done)| async move {
-            if done {
-                return None;
-            }
+        futures::stream::unfold(
+            (monitor, true, false),
+            move |(mut monitor, init, done)| async move {
+                if done {
+                    return None;
+                }
 
-            if !init {
-                tokio::time::sleep(cfg.sample_every).await;
-            }
+                if !init {
+                    tokio::time::sleep(cfg.sample_every).await;
+                }
 
-            match monitor.tick(&self.socket_fd, Instant::now()) {
-                Ok(Some(event)) => Some((Ok(Some(event)), (monitor, false, false))),
-                Ok(None) => Some((Ok(None), (monitor, false, false))),
-                Err(err) => Some((Err(err), (monitor, false, true))), // emit once, then terminate next poll
-            }
+                match monitor.tick(&self.socket_fd, Instant::now()) {
+                    Ok(Some(event)) => Some((Ok(Some(event)), (monitor, false, false))),
+                    Ok(None) => Some((Ok(None), (monitor, false, false))),
+                    Err(err) => Some((Err(err), (monitor, false, true))), // emit once, then terminate next poll
+                }
+            },
+        )
+        .filter_map(|v| {
+            futures::future::ready(match v {
+                Ok(Some(event)) => Some(Ok(event)),
+                Ok(None) => None,
+                Err(err) => Some(Err(err)),
+            })
         })
-        .filter_map(|v| futures::future::ready(match v {
-            Ok(Some(event)) => Some(Ok(event)),
-            Ok(None) => None,
-            Err(err) => Some(Err(err)),
-        }))
     }
 }
 
@@ -206,4 +248,3 @@ impl Connected<IncomingStream<'_, TcpListenerWithSocketRef>> for ConnectInfoWith
         stream.remote_addr().clone()
     }
 }
-

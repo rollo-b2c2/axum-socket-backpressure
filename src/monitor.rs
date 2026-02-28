@@ -1,4 +1,8 @@
-use std::{os::fd::{AsFd, AsRawFd}, io, time::{Duration, Instant}};
+use std::{
+    io,
+    os::fd::{AsFd, AsRawFd},
+    time::{Duration, Instant},
+};
 
 use crate::os_sendq_bytes;
 
@@ -10,6 +14,16 @@ pub struct PressureConfig {
     /// non-zero longer than this means we have persistent backpressure
     pub max_nonzero_for: Duration,
     pub sample_every: Duration,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct PersistentBackPressure {
+    /// How long the queue/pressure signal has remained non-zero without clearing.
+    pub nonzero_for: Duration,
+    /// Current observed queue depth at the time persistence is detected.
+    pub q: u32,
+    /// Highest observed queue depth during this non-zero period.
+    pub peak_q: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
