@@ -124,6 +124,25 @@ async fn ws_handler(mut ws: WebSocket, info: ConnectInfoWithSocket) {
 `error_on_backpressure` returns the first persistent backpressure sample as a
 `PersistentBackPressure`, or an `io::Error` if the monitor fails.
 
+## macOS vs Linux notes
+
+This crate works by sampling kernel-visible socket state (for example, the amount of
+data queued for sending). The practical behavior and what you can observe differs 
+between macOS and Linux.
+
+On Linux, TCP has a fairly direct notion of “bytes currently queued to send” that you
+can query from userspace. This tends to line up with what you care
+about for WebSocket backpressure: if the peer stops reading, the kernel send queue
+grows and eventually stalls progress. Buffer sizing (`SO_SNDBUF` / `SO_RCVBUF`) is also
+aggressively managed by Linux autotuning; `getsockopt` may report values that are larger 
+than what you set due to accounting/overhead, and the kernel may grow buffers beyond
+the requested baseline.
+
+On macOS, the equivalent observability is different. Some ioctls and socket options you might expect from Linux either do not exist, return different units/semantics, or are intentionally more opaque. Buffer sizing is available, but the relationship between “what you set” and “what you observe” is not guaranteed to match Linux, and some kernel queues are not exposed in the same way. As a result, “send queue bytes” based monitoring is inherently OS-specific: the API surface is unified, but the meaning of the sampled values is not identical across platforms.
+
+In other words: treat this as “best available kernel signal” rather than a cross-platform contract with identical semantics. If you depend on specific thresholds, tune them per OS and validate behavior under real backpressure (client not reading, low receive windows, etc.).
+
+
 ## Versioning 
 
 Versioned against axum's major version. Only tested againt axum@0.8.
