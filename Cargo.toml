@@ -3,9 +3,18 @@ name = "axum-socket-backpressure"
 version = "0.1.0"
 edition = "2024"
 
+description = "Backpressure provider for axum"
+authors = ["rollokb@gmail.com"]
+license = "MIT"
+
+
 [dependencies]
 axum = "0.8"
 nix = "0.31"
 socket2 = "0.6"
 tokio = "1"
 futures = "0.3"
+
+[dev-dependencies]
+
+axum = { version = "0.8", features= ["ws"] }
