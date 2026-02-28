@@ -146,7 +146,7 @@ more opaque.
 > `SO_NWRITE = unsent_bytes + sent_but_not_ACKed_bytes`
 
 Was the closest thing I could find that matched SIOCOUTQ; *as such macOS compatibility was
-just provided so you can test this while developing.
+just provided so you can test this while developing*.
 
 Buffer sizing _is_ available on macOs, but the relationship between “what you set”
 and “what you observe” is not guaranteed to match Linux, and some kernel queues are
