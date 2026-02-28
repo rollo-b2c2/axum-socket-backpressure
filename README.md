@@ -172,7 +172,17 @@ Listener trait.
 
 ```rust,no_run
 // Provides tap_io
-use axum::listener::Listener;
+# async fn run() {
+
+use tokio::net::{TcpListener, TcpStream};
+use axum::Router;
+use std::net::SocketAddr;
+use socket2::{SockRef, TcpKeepalive};
+use std::time::Duration;
+
+# let addr: SocketAddr = todo!();
+use axum::serve::ListenerExt;
+
 
 let default_keep_alive = TcpKeepalive::new()
    .with_time(Duration::from_secs(1))
@@ -182,11 +192,13 @@ let default_keep_alive = TcpKeepalive::new()
 let listener = tokio::net::TcpListener::bind(addr).await.unwrap()
     // Always use this
     .tap_io(|tcp_stream: &mut TcpStream| {
-        socket2::SockRef::from(tcp_stream).set_tcp_keepalive(default_keep_alive)
+        socket2::SockRef::from(&*tcp_stream).set_tcp_keepalive(&default_keep_alive)
+            .expect("to be able to set keepalive");
     });
 
 let app = Router::new().into_make_service();
 axum::serve(listener, app).await;
+# }
 ```
 
 
