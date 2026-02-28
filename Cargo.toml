@@ -1,6 +1,6 @@
 [package]
 name = "axum-socket-backpressure"
-version = "0.8.2"
+version = "0.8.3"
 edition = "2024"
 
 description = "Backpressure provider for axum"
