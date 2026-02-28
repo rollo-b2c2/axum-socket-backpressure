@@ -6,6 +6,7 @@ edition = "2024"
 description = "Backpressure provider for axum"
 authors = ["rollokb@gmail.com"]
 license = "MIT"
+repository = "https://github.com/rollo-b2c2/axum-socket-backpressure"
 
 
 [dependencies]
