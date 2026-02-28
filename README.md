@@ -126,7 +126,6 @@ async fn ws_handler(mut ws: WebSocket, info: ConnectInfoWithSocket) {
 
 ## What is backpressure? 
 
-
 On Linux, TCP has a fairly direct notion of “bytes currently queued to output buffer” that you
 can query from userspace via `ioctl` [TIOCOUTQ](https://man.archlinux.org/man/TIOCOUTQ.2const.en#TIOCOUTQ).
 This is:
@@ -154,6 +153,10 @@ and “what you observe” is not guaranteed to match Linux, and some kernel que
 not exposed in the same way. For example `set_send_buffer_size` is usually ignored for values
 under 256kb in macOS, while Linux trusts you with obscenely small values like 4kb.
 
+## TODOs
+
+ - [] Allow for more fine grained Linux specific ioctl/getsockopt parameters for backpressure monitoring
+ - [] Add a test for MaybeTlsStream (generic likely needed but most people don't expose their axum apps directly to the web)
 
 ## Versioning 
 
