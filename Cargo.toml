@@ -19,3 +19,4 @@ futures = "0.3"
 [dev-dependencies]
 
 axum = { version = "0.8", features= ["ws"] }
+tokio-stream = "0.1.18"

@@ -65,6 +65,132 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+
+## Why Ping/Pong and Healthchecks Aren't Enough
+
+Correctly implemented Websockets (or any socket connection) will have a liveness
+probe. These generally come in two forms:
+
+ - Websocket ping/pong frames
+ - Application Level healthchecks like a server sending `{ "type": "healthcheck", "id": 1 }` messages to a client and timing out on failure.
+
+Naively we can assume this is sufficient — it is not. Browsers are quasi-operating systems and
+effectively create a hidden OSI layer in the networking stack. Ping/Pong frames and
+healthchecks, while technically both application level, for the JavaScript app they sit beneath; 
+as ping-pongs are eagerly responded to by the browser, and not the JavaScript application.
+If a JavaScript app is sleeping (power saving) or busy the browser will _still_ respond
+to the ping with a pong.
+
+Conversely Application level healthchecks need the JavaScript app to be awake to respond
+to server liveness checks. This nuance between ping-pongs and app level healthchecks can
+be a footgun where the server aggressively disconnects JavaScript apps that Chrome put to
+sleeping due to lack of focus or power management settings.
+
+Already we can see that there are multiple event queues. The browser level queue for processing
+ping-pong frames and the app level queue for processing all other Websocket messages.
+
+What neither of these methods tell us: has the client's networking stack is received packets?
+Like how a browser may preemptively sleep a tab, the client's operating system may preemptively
+sleep a browser. If this happens, the operating system's network stack will continue 
+to receive network packets and buffer them in the _operating system's_ socket receive queue.
+
+While the above methods will work for applications that only care about browser stalls, 
+you **can not differentiate** between a network stall and an application stall with healthchecks
+alone. This is useful because the recovery between an application stall and a network stall
+is different.
+
+ - If the JavaScript application stalls it's because the JavaScript app can't keep up - recoverable.
+ - If the ping-pong stalls it's the browser that can't keep up - recoverable.
+ - If the network stalls for small frame it's usually a dropped connection  - not recoverable.
+
+Because application stalls are nearly always recoverable, e.g you send a burst of small messages
+to a JavaScript application that takes 100ms of CPU time to process each item (more common than 
+you'd think with applications that do a lot of painting for visualisation), not only will the page
+stall, but Chrome might _also_ stall and stop responding to ping pong frames. But this is recoverable,
+once the burst is over the application will start responding to healthchecks again.
+
+However, if a client: drops off a VPN; unplugs an Ethernet cable; or losses cell reception; the socket
+will nearly always remain open, as it's the responsibility of the client's _operating system to send_ a FIN
+packet.  If the server is prepared to accept client lagging at the application level, it has no way
+of knowing if they're actually lagging at the network level.
+
+What usually happens is that a server will keep sending data into a network socket until the operating
+system gives the server application a `ENOTREADY` error when writing to a non-blocking socket.
+There is absolutely no way to determine when you will get this; the size of the send buffer is a target,
+not a cap if `tcp_moderate_rcvbuf` is set to true. It's also pretty damn large at 256kb minimum, so
+if you're sending lots of small messages you can wait for an eternity for the socket to tell
+you, "please no more". On Linux the default is 2 hours unless you set the keepalive time yourself.
+
+This crate allows you to configure this on a per handler basis in axum.  Some websockets in your
+application may want a smaller send buffer. Other websockets may want different TCP keep alive settings
+because they have different connection profiles, even setting it dynamically:
+
+```rust
+use axum::{
+    body::{Body, Bytes},
+    response::IntoResponse,
+    routing::get,
+    Router,
+    extract::ConnectInfo
+};
+
+use futures::StreamExt;
+use std::{convert::Infallible, time::Duration};
+use socket2::TcpKeepalive;
+use axum_socket_backpressure::ConnectInfoWithSocket;
+use tokio_stream::{wrappers::IntervalStream};
+
+
+async fn handler(ConnectInfo(info): ConnectInfo<ConnectInfoWithSocket>) -> impl IntoResponse {
+    let s = IntervalStream::new(tokio::time::interval(Duration::from_millis(200)))
+        .enumerate()
+        .map(move |(i, _)| {
+            if i == 5 {
+                info.as_socket_ref().set_tcp_keepalive(
+                    &TcpKeepalive::new()
+                        .with_time(Duration::from_secs(1))
+                        .with_interval(Duration::from_secs(1))
+                        .with_retries(1),
+                ).unwrap();
+            }
+
+            Ok::<Bytes, Infallible>(Bytes::from(format!("tick {i}\n")))
+        });
+
+    Body::from_stream(s)
+}
+```
+
+### Advice - Serious
+
+Linux does not set tcp_keepalive on by default. This is an incredible footgun for anyone
+serving a websocket.  You _may_ be saved from this dangerous default by reverse proxies.
+But for the love of God, don't rely on AWS or DevOps to set them to rational defaults;
+especially when it's so easy to set it yourself in Axum via the tap_io function on the
+Listener trait.
+
+
+```rust,no_run
+// Provides tap_io
+use axum::listener::Listener;
+
+let default_keep_alive = TcpKeepalive::new()
+   .with_time(Duration::from_secs(1))
+   .with_interval(Duration::from_secs(1))
+   .with_retries(1),
+);
+
+let listener = tokio::net::TcpListener::bind(addr).await.unwrap()
+    // Always use this
+    .tap_io(|tcp_stream: &mut TcpStream| {
+        socket2::SockRef::from(tcp_stream).set_tcp_keepalive(default_keep_alive)
+    });
+
+let app = Router::new().into_make_service()
+axum::serve(listener, app).await;
+```
+
+
 ## Backpressure monitoring in a WebSocket handler
 
 A common pattern is to race “send next message” against “persistent
