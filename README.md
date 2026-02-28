@@ -52,17 +52,17 @@ async fn handler(ConnectInfo(info): ConnectInfo<ConnectInfoWithSocket>) -> &'sta
     "ok"
 }
 
-# async fn run() -> Result<(), Box<dyn std::error::Error>> {
-let addr: SocketAddr = "127.0.0.1:0".parse()?;
-let listener = tokio::net::TcpListener::bind(addr).await?;
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let addr: SocketAddr = "127.0.0.1:0".parse()?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
 
-let app = Router::new()
-    .route("/", get(handler))
-    .into_make_service_with_connect_info::<ConnectInfoWithSocket>();
+    let app = Router::new()
+        .route("/", get(handler))
+        .into_make_service_with_connect_info::<ConnectInfoWithSocket>();
 
-axum::serve(TcpListenerWithSocketRef::from(listener), app).await?;
-# Ok(())
-# }
+    axum::serve(TcpListenerWithSocketRef::from(listener), app).await?;
+    Ok(())
+}
 ```
 
 ## Backpressure monitoring in a WebSocket handler
