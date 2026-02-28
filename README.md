@@ -177,8 +177,7 @@ use axum::listener::Listener;
 let default_keep_alive = TcpKeepalive::new()
    .with_time(Duration::from_secs(1))
    .with_interval(Duration::from_secs(1))
-   .with_retries(1),
-);
+   .with_retries(1);
 
 let listener = tokio::net::TcpListener::bind(addr).await.unwrap()
     // Always use this
@@ -186,7 +185,7 @@ let listener = tokio::net::TcpListener::bind(addr).await.unwrap()
         socket2::SockRef::from(tcp_stream).set_tcp_keepalive(default_keep_alive)
     });
 
-let app = Router::new().into_make_service()
+let app = Router::new().into_make_service();
 axum::serve(listener, app).await;
 ```
 
