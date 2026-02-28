@@ -124,25 +124,37 @@ async fn ws_handler(mut ws: WebSocket, info: ConnectInfoWithSocket) {
 `error_on_backpressure` returns the first persistent backpressure sample as a
 `PersistentBackPressure`, or an `io::Error` if the monitor fails.
 
-## macOS vs Linux notes
+## What is backpressure? 
 
-This crate works by sampling kernel-visible socket state (for example, the amount of
-data queued for sending). The practical behavior and what you can observe differs 
-between macOS and Linux.
 
-On Linux, TCP has a fairly direct notion of “bytes currently queued to send” that you
-can query from userspace. This tends to line up with what you care
-about for WebSocket backpressure: if the peer stops reading, the kernel send queue
-grows and eventually stalls progress. Buffer sizing (`SO_SNDBUF` / `SO_RCVBUF`) is also
-aggressively managed by Linux autotuning; `getsockopt` may report values that are larger 
-than what you set due to accounting/overhead, and the kernel may grow buffers beyond
-the requested baseline.
+On Linux, TCP has a fairly direct notion of “bytes currently queued to output buffer” that you
+can query from userspace via `ioctl` [TIOCOUTQ](https://man.archlinux.org/man/TIOCOUTQ.2const.en#TIOCOUTQ).
+This is:
 
-On macOS, the equivalent observability is different. Some ioctls and socket options you might expect from Linux either do not exist, return different units/semantics, or are intentionally more opaque. Buffer sizing is available, but the relationship between “what you set” and “what you observe” is not guaranteed to match Linux, and some kernel queues are not exposed in the same way. As a result, “send queue bytes” based monitoring is inherently OS-specific: the API surface is unified, but the meaning of the sampled values is not identical across platforms.
+> `SIOCOUTQ = unsent_bytes + sent_but_not_ACKed_bytes`
 
-In other words: treat this as “best available kernel signal” rather than a cross-platform contract with identical semantics. If you depend on specific thresholds, tune them per OS and validate behavior under real backpressure (client not reading, low receive windows, etc.).
+
+This tends to line up with what you care about for WebSocket backpressure: if the peer
+stops reading, the kernel send queue grows and eventually stalls progress. Buffer 
+sizing (`SO_SNDBUF` / `SO_RCVBUF`) is also aggressively managed by Linux 
+autotuning; `getsockopt` may report values that are larger than what you set due to 
+accounting/overhead, and the kernel may grow buffers beyond the requested baseline.
+
+On macOS, the equivalent observability is different. Some ioctls and socket options you might
+expect from Linux either do not exist, return different units/semantics, or are intentionally
+more opaque.
+
+> `SO_NWRITE = unsent_bytes + sent_but_not_ACKed_bytes`
+
+Was the closest thing I could find that matched SIOCOUTQ; *as such macOS compatibility was
+just provided so you can test this while developing.
+
+Buffer sizing _is_ available on macOs, but the relationship between “what you set”
+and “what you observe” is not guaranteed to match Linux, and some kernel queues are
+not exposed in the same way. For example `set_send_buffer_size` is usually ignored for values
+under 256kb in macOS, while Linux trusts you with obscenely small values like 4kb.
 
 
 ## Versioning 
 
-Versioned against axum's major version. Only tested againt axum@0.8.
+Versioned against axum's major version. Only tested against axum@0.8.
